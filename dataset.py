@@ -64,7 +64,7 @@ def load_data(path):
 
     return train_df, test_df, test_negative, train_ng_pool, num_user, num_item, np.array(t_features), np.array(v_features)
 
-def concat_train_dataset(df, negative, text_feature, visual_feature):
+def concat_train_dataset(df, negative, text_feature, visual_feature, num_neg):
     end = time.time()
     negative = np.array(negative)
     temp_df = pd.DataFrame(df[["userID","itemID"]])
@@ -73,7 +73,7 @@ def concat_train_dataset(df, negative, text_feature, visual_feature):
     for index, row in temp_df.iterrows():
         user, item_p, ng_pool = int(row["userID"]), int(row["itemID"]), row["negative"]
         item_n = []
-        for i in range(4):
+        for i in range(num_neg):
             idx = np.random.randint(0,len(ng_pool))
             item_n.append(ng_pool[idx])
         ng_dataset.append(item_n)
