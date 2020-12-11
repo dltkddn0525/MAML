@@ -30,13 +30,14 @@ def load_data(path):
     total_item = np.arange(0,num_item)
 
     for user in range(num_user):
-        # train ng pool = Every item - user's positive item
-        positive_item = train_df[train_df['userID']==user]['itemID'].tolist()
-        train_ng_item_u = np.setdiff1d(total_item,positive_item).tolist()
-        test_ng_item_u = np.setdiff1d(total_item,positive_item).tolist()
-        # Test negative = Every item - user's positive item
-        test_negative.append(test_ng_item_u)
-        train_ng_pool.append(train_ng_item_u)
+        trn_positive_item = train_df[train_df['userID']==user]['itemID'].tolist()
+        tst_positive_item = test_df[test_df['userID']==user]['itemID'].tolist()
+        # train ng pool = Every item - user's train positive item
+        train_ng_item_u = np.setdiff1d(total_item,trn_positive_item)
+        # test ng item = Every item - user's train positive item & test positive item
+        test_ng_item_u = np.setdiff1d(train_ng_item_u, tst_positive_item)
+        train_ng_pool.append(train_ng_item_u.tolist())
+        test_negative.append(test_ng_item_u.tolist())
 
     # train_dataset = train_df.values.tolist()
     test_df = pd.DataFrame(test_df[['userID','itemID']])
@@ -62,57 +63,85 @@ def load_data(path):
         t_features.append(text_vec[asin_i_dic[i]])
         v_features.append(vis_vec[asin_i_dic[i]])
 
-    return train_df, test_df, test_negative, train_ng_pool, num_user, num_item, np.array(t_features), np.array(v_features)
+    feature = np.concatenate((t_features,v_features),axis=1)
+    train_df = pd.DataFrame(train_df[["userID","itemID"]])
 
-def concat_train_dataset(df, negative, text_feature, visual_feature, num_neg):
-    end = time.time()
-    negative = np.array(negative)
-    temp_df = pd.DataFrame(df[["userID","itemID"]])
-    temp_df["negative"] = negative[temp_df["userID"]]
-    ng_dataset=[]
-    for index, row in temp_df.iterrows():
-        user, item_p, ng_pool = int(row["userID"]), int(row["itemID"]), row["negative"]
-        item_n = []
-        for i in range(num_neg):
-            idx = np.random.randint(0,len(ng_pool))
-            item_n.append(ng_pool[idx])
-        ng_dataset.append(item_n)
-            
-    feature = np.concatenate((text_feature, visual_feature),axis=1)
-    del temp_df["negative"]
-    print(f"Time : {time.time()-end:.4f}")
-    return temp_df.values.tolist(), ng_dataset, feature
-
+    return train_df, test_df, train_ng_pool, test_negative, num_user, num_item, feature
 
 class CustomDataset(Dataset):
-    def __init__(self, dataset, feature, negative, istrain=False):
+    '''
+    Train Batch [user, item_p, item_n, feature_p, feature_n]
+    user = [N]
+    item_p = [N]
+    item_n = [N x num_neg]
+    feature_p = [N x (vis_feature_dim + text_feature_dim)]
+    featuer_n = [N x num_neg x (vis_feature_dim + text_feature_dim)]
+
+    Test Batch [user, item, feature, label]
+    N = number of positive + negative item for corresponding user
+    user = [1]
+    item = [N]
+    feature = [N x (vis_feature_dim + text_feature_dim)]
+    label = [N] 1 for positive, 0 for negative
+    '''
+    def __init__(self, dataset, feature, negative, num_neg = 4, istrain=False):
         super(CustomDataset,self).__init__()
         self.dataset = dataset
         self.feature = feature
         self.negative = negative
         self.istrain = istrain
+        self.num_neg = num_neg
+        self.train_dataset = None
 
-        if not istrain:
-            self.dataset = self.make_testset()
+        if istrain:
+            # Something
+            self.train_ng_sampling()
+        else:
+            self.make_testset()
+
+    def train_ng_sampling(self):
+        assert self.istrain
+        end = time.time()
+        print(f"Negative sampling for Train. {self.num_neg} Negative samples per positive pair")
+
+        train_negative = []
+        for index, row in self.dataset.iterrows():
+            user = int(row["userID"])
+            ng_pool = self.negative[user]
+            ng_item_u = []
+            # Sampling num_neg samples
+            for i in range(self.num_neg):
+                idx = np.random.randint(0,len(ng_pool))
+                ng_item_u.append(ng_pool[idx])
+            train_negative.append(ng_item_u)
+
+        self.dataset["negative"] = train_negative
+        self.train_dataset = self.dataset.values.tolist()
+        print(f"Negative Sampling Complete ({time.time()-end:.4f} sec)")
 
     def make_testset(self):
-        ng_samples = []
+        assert not self.istrain
+        
         users = np.unique(self.dataset["userID"])
+        test_dataset = []
         for user in users:
-            ng_pool = self.negative[user]
-            for item in ng_pool:
-                ng_samples.append([user,item,0])
+            test_negative = self.negative[user]
+            test_positive = self.dataset[self.dataset["userID"]==user]["itemID"].tolist()
+            item = test_positive + test_negative
+            label = np.zeros(len(item))
+            label[:len(test_positive)]=1
+            label = label.tolist()
+            test_user = np.ones(len(item))*user
+            test_dataset.append([test_user.tolist(),item, label])
 
-        dataset = self.dataset.values.tolist() + ng_samples
-        return dataset
+        self.dataset = test_dataset
         
     def __len__(self):
         return len(self.dataset)
 
     def __getitem__(self, index):
         if self.istrain:
-            user, item_p = self.dataset[index]
-            item_n = self.negative[index]
+            user, item_p, item_n = self.train_dataset[index]
             feature_p = self.feature[item_p]
             feature_n = self.feature[item_n]
             return user, item_p, item_n, feature_p, feature_n

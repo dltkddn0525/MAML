@@ -81,7 +81,7 @@ class NormalizeLayer(nn.Module):
 def modified_softmax(x):
     exp = torch.exp(x)
     if len(exp.shape)>2:
-        sum = torch.sum(exp,axis=-1).reshape(exp.shape[0],exp.shape[1],-1)
+        sum = torch.sum(x,axis=-1).reshape(x.shape[0],x.shape[1],-1)
     else:
-        sum = torch.sum(exp,axis=-1).reshape(exp.shape[0],-1)
+        sum = torch.sum(x,axis=-1).reshape(x.shape[0],-1)
     return exp/sum

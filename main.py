@@ -52,27 +52,12 @@ def main():
         json.dump(args.__dict__, f, indent=2)
 
     # Load dataset
-    '''
-    Train Batch [user, item_p, item_n, feature_p, feature_n]
-    user = [N]
-    item_p = [N]
-    item_n = [N x num_neg]
-    feature_p = [N x (vis_feature_dim + text_feature_dim)]
-    featuer_n = [N x num_neg x (vis_feature_dim + text_feature_dim)]
-
-    Test Batch [user, item, feature]
-    user = [N]
-    item = [N]
-    feature = [N x (vis_feature_dim + text_feature_dim)]
-    '''
     path = args.data_path
-    train_dataset, test_dataset, test_negative, train_ng_pool, num_user, num_item, t_features, v_features = D.load_data(path)
-    train_dataset, train_negative, feature = D.concat_train_dataset(train_dataset, train_ng_pool, t_features, v_features, args.num_neg)
-    train_dataset = D.CustomDataset(train_dataset, feature, negative=train_negative, istrain=True)
-    test_dataset = D.CustomDataset(test_dataset, feature, negative=test_negative, istrain=False)
-    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=4, collate_fn=my_collate)
-    test_loader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False, num_workers=4)
-
+    train_dataset, test_dataset, train_ng_pool, test_negative, num_user, num_item, feature = D.load_data(path)
+    train_dataset = D.CustomDataset(train_dataset, feature, negative=train_ng_pool, num_neg = args.num_neg, istrain=True)
+    test_dataset = D.CustomDataset(test_dataset, feature, negative=test_negative, num_neg = None, istrain=False)
+    train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=4, collate_fn=my_collate_trn)
+    test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=4, collate_fn=my_collate_tst)
 
     # Model
     model = MAML(num_user, num_item, args.embed_dim, args.dropout_rate).cuda()
@@ -143,49 +128,31 @@ def train(model, embedding_loss, feature_loss, covariance_loss, optimizer, train
 
 def test(model, test_loader, test_logger, epoch):
     model.eval()
-    
+    hr = AverageMeter()
+    ndcg = AverageMeter()
     end = time.time()
     for i, (user, item, feature, label) in enumerate(test_loader):
         with torch.no_grad():
+            item, feature, label = item.squeeze(0), feature.squeeze(0), label.squeeze(0)
+            user = user.repeat(len(item))
             user, item, feature, label = user.cuda(), item.cuda(), feature.cuda(), label.cuda()
 
             _, _, _, score = model(user, item, feature)
+
             pos_idx = label.nonzero()
-            neg_idx = (label==0).nonzero()
+            _, indices = torch.topk(-score, args.topk)
+            recommends = torch.take(item, indices).cpu().numpy()
+            gt_item = item[pos_idx].cpu().numpy()
 
-            positive_batch = torch.cat((user[pos_idx],item[pos_idx],score[pos_idx]),axis=1)
-            negative_batch = torch.cat((user[neg_idx],item[neg_idx],score[neg_idx]),axis=1)
-
-            if i == 0:
-                positive = positive_batch
-                negative = negative_batch
-            else:
-                positive = torch.cat((positive,positive_batch),axis=0)
-                negative = torch.cat((negative,negative_batch),axis=0)
-        if i % 1000 == 0 :
-            print(f"[{i}/{len(test_loader)}] Iteration Processed")
-
-    hr, nDCG = eval_recommend(positive.cpu(), negative.cpu(), top_k=args.top_k)
-    test_logger.write([epoch, hr, nDCG])
+            performance = get_performance(gt_item, recommends)
+            hr.update(performance[0])
+            ndcg.update(performance[1])
     
-def eval_recommend(positive, negative, top_k):
-    hr = []
-    nDCG = []
-    for i in range(len(positive)):
-        user = positive[i][0]
-        temp = torch.cat((positive[i].unsqueeze(0), negative[negative[:,0]==user]),axis=0)
-        score = -temp[:,2]
-        _, indices = torch.topk(score, top_k)
-        recommends = torch.take(temp[:,1], indices).numpy().tolist()
-        gt_item = temp[0,1].item()
-        performace = get_performance(gt_item, recommends)
-        hr.append(performace[0])
-        nDCG.append(performace[1])
+    print(f"Epoch : [{epoch+1}/{args.epoch}] Hit Ratio : {hr.avg:.4f} nDCG : {ndcg.avg:.4f} Test Time : {time.time()-end:.4f}")
+    test_logger.write([epoch, hr.avg, ndcg.avg])
     
-    return sum(hr)/len(hr), sum(nDCG)/len(nDCG)
 
-
-def my_collate(batch):
+def my_collate_trn(batch):
     user = [item[0]for item in batch]
     user = torch.LongTensor(user)
     item_p = [item[1] for item in batch]
@@ -197,6 +164,17 @@ def my_collate(batch):
     feature_n = [item[4] for item in batch]
     feature_n = torch.Tensor(feature_n)
     return [user, item_p, item_n, feature_p, feature_n]
+
+def my_collate_tst(batch):
+    user = [items[0] for items in batch]
+    user = torch.LongTensor(user)
+    item = [items[1] for items in batch]
+    item = torch.LongTensor(item)
+    feature = [items[2] for items in batch]
+    feature = torch.Tensor(feature)
+    label = [items[3] for items in batch]
+    label = torch.Tensor(label)
+    return [user, item, feature, label]
 
 if __name__ == "__main__":
     main()
