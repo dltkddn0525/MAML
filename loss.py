@@ -47,5 +47,5 @@ class Covariance_loss(nn.Module):
         cov = torch.matmul(cov.t(),cov) / num_row
         loss = torch.norm(cov)**2 - torch.norm(cov.diag())**2
 
-        return loss / num_row
+        return loss
 

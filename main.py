@@ -76,11 +76,11 @@ def main():
 
     # Train & Eval
     for epoch in range(args.epoch):
+        train_loader.dataset.train_ng_sampling()
         train(model, embedding_loss, feature_loss, covariance_loss, optimizer, train_loader, train_logger, epoch)
-        # Evaluate Every 100 epoch
-        if (epoch+1) % 100 == 0:
+        if (epoch+1) % 100 == 0 or epoch==0:
             test(model, test_loader, test_logger, epoch)
-            # Save Model
+            # Save Model every 100 epoch
             torch.save(model.state_dict(), f"{save_path}/model_{epoch+1}.pth")
         
             
@@ -133,20 +133,20 @@ def test(model, test_loader, test_logger, epoch):
     end = time.time()
     for i, (user, item, feature, label) in enumerate(test_loader):
         with torch.no_grad():
-            item, feature, label = item.squeeze(0), feature.squeeze(0), label.squeeze(0)
-            user = user.repeat(len(item))
+            user, item, feature, label = user.squeeze(0), item.squeeze(0), feature.squeeze(0), label.squeeze(0)
             user, item, feature, label = user.cuda(), item.cuda(), feature.cuda(), label.cuda()
-
             _, _, _, score = model(user, item, feature)
 
             pos_idx = label.nonzero()
-            _, indices = torch.topk(-score, args.topk)
+            _, indices = torch.topk(-score, args.top_k)
             recommends = torch.take(item, indices).cpu().numpy()
             gt_item = item[pos_idx].cpu().numpy()
-
             performance = get_performance(gt_item, recommends)
             hr.update(performance[0])
             ndcg.update(performance[1])
+
+            if i % 100 == 0:
+                print(f"{i+1} Users tested.")
     
     print(f"Epoch : [{epoch+1}/{args.epoch}] Hit Ratio : {hr.avg:.4f} nDCG : {ndcg.avg:.4f} Test Time : {time.time()-end:.4f}")
     test_logger.write([epoch, hr.avg, ndcg.avg])
