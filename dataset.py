@@ -121,7 +121,6 @@ class CustomDataset(Dataset):
 
     def make_testset(self):
         assert not self.istrain
-        
         users = np.unique(self.dataset["userID"])
         test_dataset = []
         for user in users:

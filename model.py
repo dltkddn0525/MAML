@@ -24,6 +24,8 @@ class MAML(nn.Module):
         hidden_dim = 256
         modules = []
         for i in range(3):
+            if i == 2:
+                hidden_dim *= 2
             modules.append(NormalizeLayer())
             modules.append(nn.Linear(input_dim, hidden_dim))
             modules.append(nn.ReLU())
@@ -60,11 +62,14 @@ class MAML(nn.Module):
             p_u = p_u.unsqueeze(1).expand(-1,q_i.shape[1],-1)
         input_cat = torch.cat((p_u,q_i,q_i_feature),axis=-1)
         attention = self.attention(input_cat)
-        attention = self.embed_dim * modified_softmax(attention)
-
+        # attention = self.embed_dim * modified_softmax(attention)
+        attention = self.embed_dim * F.softmax(attention, dim=-1)
+        
         # Distance
-        dist = torch.norm(torch.mul(attention, p_u)-torch.mul(attention,q_i),dim=-1, p=2)
-
+        # dist = torch.norm(torch.mul(attention, p_u)-torch.mul(attention,q_i),dim=-1, p=2)
+        temp = torch.mul(attention, p_u)-torch.mul(attention,q_i)
+        dist = torch.sum(temp**2,axis=-1)
+        
         return p_u, q_i, q_i_feature, dist
 
 

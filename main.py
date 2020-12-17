@@ -17,7 +17,7 @@ parser.add_argument('--save_path', default='./result', type=str,
                      help='savepath')
 parser.add_argument('--batch_size', default=1024, type=int,
                      help='batch size')
-parser.add_argument('--epoch', default=1000, type=int,
+parser.add_argument('--epoch', default=1, type=int,
                      help='train epoch')
 parser.add_argument('--data_path', default='./Data/Office', type=str,
                      help='Path to dataset')
@@ -37,6 +37,9 @@ parser.add_argument('--top_k', default=10, type=int,
                      help='Top k Recommendation')
 parser.add_argument('--num_neg', default=4, type=int,
                      help='Number of negative samples for training')
+parser.add_argument('--load_path', default='./', type=str,
+                     help='Path to saved model')
+
 
 args = parser.parse_args()
 
@@ -53,14 +56,20 @@ def main():
 
     # Load dataset
     path = args.data_path
-    train_dataset, test_dataset, train_ng_pool, test_negative, num_user, num_item, feature = D.load_data(path)
-    train_dataset = D.CustomDataset(train_dataset, feature, negative=train_ng_pool, num_neg = args.num_neg, istrain=True)
-    test_dataset = D.CustomDataset(test_dataset, feature, negative=test_negative, num_neg = None, istrain=False)
+    train_df, test_df, train_ng_pool, test_negative, num_user, num_item, feature = D.load_data(path)
+    train_dataset = D.CustomDataset(train_df, feature, negative=train_ng_pool, num_neg = args.num_neg, istrain=True)
+    test_dataset = D.CustomDataset(test_df, feature, negative=test_negative, num_neg = None, istrain=False)
+    # test_dataset = D.CustomDataset(train_df, feature, negative=train_ng_pool, num_neg = None, istrain=False)
     train_loader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True, num_workers=4, collate_fn=my_collate_trn)
     test_loader = DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=4, collate_fn=my_collate_tst)
 
     # Model
     model = MAML(num_user, num_item, args.embed_dim, args.dropout_rate).cuda()
+    print(model)
+    if args.load_path is not None:
+        checkpoint = torch.load(args.load_path)
+        model.load_state_dict(checkpoint)
+        print("Pretrained Model Loaded")
         
     # Optimizer
     optimizer = torch.optim.Adam(model.parameters(),lr=args.lr)
@@ -105,7 +114,15 @@ def train(model, embedding_loss, feature_loss, covariance_loss, optimizer, train
         loss_e = embedding_loss(dist_p, dist_n)
         loss_f = feature_loss(q_i, q_i_feature, q_k, q_k_feature)
         loss_c = covariance_loss(p_u, q_i, q_k)
-        loss = loss_e + args.feat_weight * loss_f + args.cov_weight * loss_c
+
+        # L2 reg for attention layer
+        linear1 = model.attention[1].parameters()
+        linear2 = model.attention[5].parameters()
+        reg1 = l2_regularization(linear1, 100.0)
+        reg2 = l2_regularization(linear2, 100.0)
+
+        # loss = loss_e + args.feat_weight * loss_f + args.cov_weight * loss_c
+        loss = loss_e + (args.feat_weight * loss_f) + (args.cov_weight * loss_c) + reg1 + reg2
 
         optimizer.zero_grad()
         loss.backward()
@@ -151,6 +168,11 @@ def test(model, test_loader, test_logger, epoch):
     print(f"Epoch : [{epoch+1}/{args.epoch}] Hit Ratio : {hr.avg:.4f} nDCG : {ndcg.avg:.4f} Test Time : {time.time()-end:.4f}")
     test_logger.write([epoch, hr.avg, ndcg.avg])
     
+def l2_regularization(params, _lambda):
+    l2_reg = torch.cat([x.view(-1) for x in params])
+    l2_reg = _lambda * torch.norm(l2_reg,2)
+    return l2_reg
+
 
 def my_collate_trn(batch):
     user = [item[0]for item in batch]

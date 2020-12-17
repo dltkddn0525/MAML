@@ -9,19 +9,25 @@ class Embedding_loss(nn.Module):
         self.num_item = num_item
 
     def forward(self,dist_p,dist_n):
-        dist_p = dist_p.unsqueeze(1)
-        loss = self.margin + dist_p**2 - dist_n**2
+        closest_dist_n, indices = torch.min(dist_n,axis=1)
+        # dist_p = dist_p.unsqueeze(1)
+        # loss = self.margin + dist_p**2 - dist_n**2
+        loss = self.margin + dist_p - closest_dist_n
         loss = F.relu(loss)
 
-        num_imposter = loss>0
+        # num_imposter = loss>0
+        num_imposter = self.margin + dist_p.unsqueeze(1) - dist_n
+        num_imposter = num_imposter > 0
         num_imposter = torch.sum(num_imposter,axis=1)
-        num_imposter = num_imposter.unsqueeze(1).float()
+        # num_imposter = num_imposter.unsqueeze(1).float()
+        num_imposter = num_imposter.float()
         rank = num_imposter * self.num_item / dist_n.shape[1]
         weight = torch.log(rank+1)
         weight.requires_grad_(False)
 
         loss *= weight
-        return torch.mean(loss)
+        # return torch.mean(loss)
+        return torch.sum(loss)
 
 class Feature_loss(nn.Module):
     def __init__(self):
@@ -30,9 +36,10 @@ class Feature_loss(nn.Module):
     def forward(self, q_i, q_i_feature, q_k, q_k_feature):
         id_vec = torch.cat((q_i.unsqueeze(1),q_k),axis=1)
         feature_vec = torch.cat((q_i_feature.unsqueeze(1),q_k_feature),axis=1)
-        loss = torch.norm(feature_vec - id_vec, dim=-1, p=2)
-        
-        return torch.mean(loss)
+        # loss = torch.norm(feature_vec - id_vec, dim=-1, p=2)
+        loss = (feature_vec - id_vec)**2
+        # return torch.mean(loss)
+        return torch.sum(loss)
 
 class Covariance_loss(nn.Module):
     def __init__(self):
